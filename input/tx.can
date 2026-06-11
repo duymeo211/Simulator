@@ -1,0 +1,12 @@
+version: 1.0
+bus: CAN_FD
+cycle_unit: ms
+
+
+messages:
+  - label: ZN21S13
+    name: ZN21S13
+    id: 0x390
+    cycle: 1000
+    length: 8
+    data: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]
