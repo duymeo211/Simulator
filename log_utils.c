@@ -48,7 +48,7 @@ void log_prepare_folder(const char* path)
     if (!d) return;
 
     struct dirent* dir;
-    char filepath[256];
+    char filepath[512];
 
     while ((dir = readdir(d)) != NULL)
     {

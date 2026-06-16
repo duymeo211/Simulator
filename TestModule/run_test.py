@@ -39,12 +39,11 @@ import yaml
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-from framework.process_mgr     import ProcessManager
-from framework.vsoc_log_parser import parse_log, summary
+from framework.process_mgr      import ProcessManager
+from framework.vsoc_log_parser  import parse_log, summary
 from framework.validator        import Validator
 from framework.reporter         import (ConsoleReporter, TestCaseResult,
-                                         write_text_report, write_html_report)
-# from framework.injector         import DataInjector
+                                        write_text_report, write_html_report)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +210,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="CAN Integration Test Runner")
     parser.add_argument(
-        "--config", default=os.path.join(BASE_DIR, "test_original.yaml"),
+        "--config", default=os.path.join(BASE_DIR, "Testcases/test_original.yaml"),
         help="Path to test_cases.yaml (default: test_cases.yaml)")
     parser.add_argument(
         "--parse-only", action="store_true",

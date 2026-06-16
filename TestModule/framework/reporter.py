@@ -84,10 +84,15 @@ class ConsoleReporter:
         if result.description:
             print(f"       {result.description}")
 
+        name_w   = max((len(chk.name)   for chk in result.checks), default=0)
+        status_w = max((len(chk.status) for chk in result.checks), default=4)
+
         for chk in result.checks:
-            icon  = "✓" if chk.passed else "✗"
-            clr   = _GREEN if chk.passed else _RED
-            line  = f"  {icon} [{chk.status}] {chk.name}"
+            icon   = "✓" if chk.passed else "✗"
+            clr    = _GREEN if chk.passed else _RED
+            status = f"[{chk.status}]".ljust(status_w + 2)
+            name   = chk.name.ljust(name_w)
+            line   = f"  {icon} {status}  {name}"
             if chk.detail:
                 line += f"  →  {chk.detail}"
             print(_c(line, clr, self.color))
@@ -161,68 +166,87 @@ def write_html_report(results: List[TestCaseResult],
 
     passed = sum(1 for r in results if r.passed)
     failed = len(results) - passed
-    suite_color = "#2ecc71" if failed == 0 else "#e74c3c"
+    suite_color = "#27ae60" if failed == 0 else "#e74c3c"
+
+    def badge(label: str, color: str) -> str:
+        return (
+            f'<span style="display:inline-block;padding:2px 10px;border-radius:999px;'
+            f'background:{color};color:#fff;font-size:.78em;font-weight:700;'
+            f'letter-spacing:.04em">{label}</span>'
+        )
 
     rows = ""
     for i, r in enumerate(results, 1):
-        verdict_clr = "#2ecc71" if r.passed else "#e74c3c"
-        verdict     = "PASS" if r.passed else "FAIL"
-
-        check_rows = ""
-        for chk in r.checks:
-            clr  = "#2ecc71" if chk.passed else "#e74c3c"
-            icon = "✓" if chk.passed else "✗"
-            check_rows += (
-                f'<tr>'
-                f'<td style="color:{clr};font-weight:bold;padding:3px 10px">{icon} {chk.status}</td>'
-                f'<td style="padding:3px 10px">{chk.name}</td>'
-                f'<td style="padding:3px 10px;color:#555;font-size:.85em">{chk.detail}</td>'
-                f'</tr>'
-            )
+        row_bg     = "#fff" if i % 2 == 0 else "#f8fafc"
+        chk_bg     = "#f0fdf4" if i % 2 == 0 else "#f0fdf4"
+        verdict_bg = "#27ae60" if r.passed else "#e74c3c"
+        verdict    = "PASS" if r.passed else "FAIL"
 
         rows += f"""
-<tr style="background:#f9f9f9">
-  <td style="padding:8px 10px;font-weight:bold">[{i}] {r.name}</td>
-  <td style="padding:8px 10px;font-weight:bold;color:{verdict_clr}">{verdict}</td>
-  <td style="padding:8px 10px;color:#666;font-size:.9em">{r.description}</td>
-</tr>
-<tr>
-  <td colspan="3" style="padding:0 20px 12px">
-    <table style="width:100%;border-collapse:collapse">{check_rows}</table>
+<tr style="background:{row_bg};border-top:2px solid #dce1e7">
+  <td style="padding:12px 14px;font-weight:700;font-size:.95em;color:#1a202c">
+    <span style="color:#94a3b8;font-weight:400;margin-right:6px">[{i}]</span>{r.name}
   </td>
+  <td style="padding:12px 14px;white-space:nowrap">{badge(verdict, verdict_bg)}</td>
+  <td style="padding:12px 14px;color:#64748b;font-size:.88em">{r.description}</td>
 </tr>
 """
+        for chk in r.checks:
+            clr  = "#16a34a" if chk.passed else "#dc2626"
+            icon = "✓" if chk.passed else "✗"
+            icon_style = (
+                f'display:inline-block;width:18px;height:18px;line-height:18px;'
+                f'text-align:center;border-radius:50%;background:{clr};'
+                f'color:#fff;font-size:.75em;font-weight:900;margin-right:8px;flex-shrink:0'
+            )
+            rows += (
+                f'<tr style="background:{chk_bg};border-bottom:1px solid #e2e8f0">'
+                f'<td style="padding:6px 14px 6px 32px;font-size:.86em;color:#374151;white-space:nowrap">'
+                f'<span style="{icon_style}">{icon}</span>{chk.name}</td>'
+                f'<td style="padding:6px 14px;text-align:center"></td>'
+                f'<td style="padding:6px 14px;font-size:.83em;color:#4b5563;'
+                f'font-family:monospace;word-break:break-word">{chk.detail}</td>'
+                f'</tr>\n'
+            )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8">
 <title>CAN Test Report</title>
 <style>
-  body  {{ font-family:'Segoe UI',Arial,sans-serif; margin:32px; background:#f4f6f9; }}
-  h1    {{ color:#2c3e50; margin-bottom:4px; }}
-  .box  {{ background:#fff; border-radius:8px; padding:20px;
-           box-shadow:0 2px 8px rgba(0,0,0,.1); margin-bottom:24px; }}
-  .badge{{ display:inline-block; padding:6px 16px; border-radius:4px;
-           color:#fff; font-weight:bold; font-size:1.1em; }}
+  *, *::before, *::after {{ box-sizing: border-box; }}
+  body  {{ font-family:'Segoe UI',Arial,sans-serif; margin:40px; background:#f1f5f9; color:#1e293b; }}
+  h1    {{ color:#1e293b; margin-bottom:2px; font-size:1.6em; }}
+  .sub  {{ color:#94a3b8; font-size:.9em; margin-bottom:24px; }}
+  .box  {{ background:#fff; border-radius:10px; padding:24px;
+           box-shadow:0 1px 4px rgba(0,0,0,.08); margin-bottom:28px; }}
+  .summary {{ display:flex; align-items:center; gap:16px; }}
+  .pill {{ display:inline-block; padding:8px 22px; border-radius:999px;
+           color:#fff; font-weight:700; font-size:1.05em; }}
+  .stat {{ font-size:.95em; color:#64748b; }}
+  .stat b {{ color:#1e293b; }}
   table {{ border-collapse:collapse; width:100%; }}
-  th    {{ background:#2c3e50; color:#fff; padding:10px; text-align:left; }}
+  th    {{ background:#1e293b; color:#f8fafc; padding:11px 14px;
+           text-align:left; font-size:.85em; letter-spacing:.05em; text-transform:uppercase; }}
+  td    {{ vertical-align:middle; }}
+  tr:last-child td {{ border-bottom:none; }}
 </style>
 </head>
 <body>
 <h1>CAN Integration Test Report</h1>
-<p style="color:#888">{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+<p class="sub">{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
 
 <div class="box">
-  <span class="badge" style="background:{suite_color}">
-    {passed}/{len(results)} PASSED
-  </span>
-  &nbsp;
-  <span style="color:#e74c3c;font-weight:bold">{failed} FAILED</span>
+  <div class="summary">
+    <span class="pill" style="background:{suite_color}">{passed}/{len(results)} PASSED</span>
+    <span class="stat"><b>{failed}</b> failed &nbsp;·&nbsp; <b>{passed}</b> passed &nbsp;·&nbsp; <b>{len(results)}</b> total</span>
+  </div>
 </div>
 
 <div class="box">
 <table>
-  <thead><tr><th>Test</th><th>Result</th><th>Description</th></tr></thead>
+  <colgroup><col style="width:32%"><col style="width:90px"><col></colgroup>
+  <thead><tr><th>Test</th><th>Result</th><th>Description / Detail</th></tr></thead>
   <tbody>{rows}</tbody>
 </table>
 </div>
