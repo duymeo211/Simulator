@@ -1,0 +1,22 @@
+[13:52:19.327] [INFO] System log initialized
+[13:52:19.327] [INFO] Simulator state initialized: INIT
+[13:52:20.918] [INFO] Ch1 TCP server object created (port=5000)
+[13:52:20.919] [INFO] Ch1 TCP networking initialized
+[13:52:20.920] [INFO] Ch1 TCP server started at 127.0.0.1:5000
+[13:52:20.920] [INFO] Ch2 TCP server object created (port=5001)
+[13:52:20.920] [INFO] Ch2 TCP networking initialized
+[13:52:20.921] [INFO] Ch2 TCP server started at 127.0.0.1:5001
+[13:52:20.921] [INFO] Ch3 TCP server object created (port=5002)
+[13:52:20.921] [INFO] Ch3 TCP networking initialized
+[13:52:20.921] [INFO] Ch3 TCP server started at 127.0.0.1:5002
+[13:52:20.929] [INFO] Ch1 state initialized: DISCONNECTED
+[13:52:20.929] [INFO] Ch2 state initialized: DISCONNECTED
+[13:52:20.929] [INFO] Ch3 state initialized: DISCONNECTED
+[13:52:20.939] [INFO] TX Transmit thread started (ch=3, interval=1 ms)
+[13:52:22.435] [INFO] Simulator state: INIT -> RUNNING
+[13:52:23.906] [INFO] Ch1 TCP client connected
+[13:52:23.906] [INFO] Ch1 state: DISCONNECTED -> CONNECTED
+[13:52:23.906] [INFO] Ch2 TCP client connected
+[13:52:23.906] [INFO] Ch2 state: DISCONNECTED -> CONNECTED
+[13:52:23.908] [INFO] Ch3 TCP client connected
+[13:52:23.908] [INFO] Ch3 state: DISCONNECTED -> CONNECTED

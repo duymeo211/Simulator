@@ -1,0 +1,125 @@
+# =============================================================================
+# test_original.yaml
+# Verify default behaviour using the .can files exactly as they are on disk.
+# No data injection — simulator starts with its factory configuration.
+#
+# Run:  python run_test.py --config test_original.yaml
+# =============================================================================
+
+settings:
+  run_duration_sec:  15
+  startup_delay_sec:  5
+  connect_delay_sec:  5
+  vsoc_log: vSoC/rx_debug.log
+
+tests:
+
+  # ---------------------------------------------------------------------------
+  # 1. Connectivity — every configured signal must reach vSoC
+  # ---------------------------------------------------------------------------
+  - name: "Periodic Signal Presence"
+    description: "Core CAN IDs must be received by vSoC at least once"
+    checks:
+      - type: presence
+        name: "0x381 present"
+        can_id: "0x381"
+
+      - type: presence
+        name: "0x390 present"
+        can_id: "0x390"
+
+      - type: presence
+        name: "0x3E7 present"
+        can_id: "0x3E7"
+
+  # ---------------------------------------------------------------------------
+  # 2. Throughput — enough frames to confirm continuous streaming
+  # ---------------------------------------------------------------------------
+  - name: "Message Count Sanity"
+    description: "At 1000 ms cycle over 15 s, expect at least 10 frames each"
+    checks:
+      - type: count
+        name: "0x381 >= 14 frames"
+        can_id: "0x381"
+        min_count: 14
+
+      - type: count
+        name: "0x390 >= 14 frames"
+        can_id: "0x390"
+        min_count: 14
+
+      - type: count
+        name: "0x3E7 >= 14 frames"
+        can_id: "0x3E7"
+        min_count: 14
+
+  # ---------------------------------------------------------------------------
+  # 3. Default payload — bytes match factory .can file values
+  # ---------------------------------------------------------------------------
+  - name: "Signal Data Integrity 0x381"
+    description: "0x381 DLC=32: bytes[0..3] must match default 00 07 00 3C"
+    checks:
+      - type: data_byte
+        name: "0x381 data[0] == 0x00"
+        can_id: "0x381"
+        offset: 0
+        value:  "0x00"
+
+      - type: data_byte
+        name: "0x381 data[1] == 0x07"
+        can_id: "0x381"
+        offset: 1
+        value:  "0x07"
+
+      - type: data_byte
+        name: "0x381 data[2] == 0x00"
+        can_id: "0x381"
+        offset: 2
+        value:  "0x00"
+
+      - type: data_byte
+        name: "0x381 data[3] == 0x3C"
+        can_id: "0x381"
+        offset: 3
+        value:  "0x3C"
+
+  - name: "Signal Data Integrity 0x390"
+    description: "0x390 DLC=8: first 4 bytes must be 0x00 in default state"
+    checks:
+      - type: data_mask
+        name: "0x390 first 4 bytes all zero"
+        can_id: "0x390"
+        mask:     ["0xFF", "0xFF", "0xFF", "0xFF"]
+        expected: ["0x00", "0x00", "0x00", "0x00"]
+
+  - name: "Check all byte matching"
+    description: "0x381 DLC=32: should match all"
+    checks:
+      - type: data_all_bytes 
+        name: "0x381 all byte match"
+        can_id: "0x381"
+        expected: ["0x00", "0x07", "0x00", "0x3c", "0x00", "0x00", "0x00", "0x00",
+                   "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00",
+                   "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00",
+                   "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+
+  # ---------------------------------------------------------------------------
+  # 4. Timing — cycle rate must match the configured 1000 ms period
+  # ---------------------------------------------------------------------------
+  - name: "Periodic Interval 0x390"
+    description: "0x390 must arrive every 1000 ms (±50 ms)"
+    checks:
+      - type: interval
+        name: "0x390 interval ~ 1000 ms"
+        can_id: "0x390"
+        expected_ms:  1000
+        tolerance_ms: 50
+
+  - name: "Periodic Interval 0x381"
+    description: "0x381 must arrive every 1000 ms (±50 ms)"
+    checks:
+      - type: interval
+        name: "0x381 interval ~ 1000 ms"
+        can_id: "0x381"
+        expected_ms:  1000
+        tolerance_ms: 50

@@ -1,0 +1,178 @@
+# =============================================================================
+# test_runtime.yaml
+# Change CAN message data WHILE the simulator is running by sending Edit TX
+# commands through the stdin pipe.
+#
+# Run:  python run_test.py --config test_runtime.yaml --duration 20
+#
+# Why skip_count: 3
+# -----------------
+# The simulator sends to 3 pages (Page-0, Page-1, Page-2).  When an inject
+# fires, up to 3 frames may already be in the TCP/vSoC pipeline carrying old
+# data.  skip_count: 3 discards those leading in-flight frames so the check
+# only validates frames that were transmitted AFTER the new data took effect.
+#
+# Timing diagram (20 s run):
+#
+#   t= 0s  default data for all signals
+#   t= 5s  0x381 inject -> 11 22 33 44        (TC-RT-01)
+#   t= 3s  0x390 inject -> 55 66 77 88        (TC-RT-02)
+#   t= 5s  0x3E7 first inject -> AA BB CC DD  (TC-RT-03)
+#   t=12s  0x3E7 second inject -> FF EE DD CC (TC-RT-03)
+#   t=20s  stop
+# =============================================================================
+
+settings:
+  run_duration_sec:  20
+  startup_delay_sec:  5
+  connect_delay_sec:  5
+  vsoc_log: vSoC/rx_debug.log
+
+tests:
+
+  # ---------------------------------------------------------------------------
+  # TC-RT-01: Single inject — verify original data, then new data
+  # Signal: 0x381   Inject at t+5s -> 11 22 33 44
+  # ---------------------------------------------------------------------------
+  - name: "Runtime Inject: 0x381 single change"
+    description: >
+      0x381 starts with default data (00 07 00 3C).
+      At t+5s inject 11 22 33 44.
+      First frame must have original data[1]=0x07.
+      Frames after t+6s (skipping 3 in-flight) must carry the new data.
+    runtime_inject:
+      - can_id:    "0x381"
+        delay_sec: 5
+        data:
+          ["0x11", "0x22", "0x33", "0x44",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00"]
+    checks:
+      - type: data_byte
+        name: "0x381 first frame has original data[1] == 0x07"
+        can_id: "0x381"
+        offset: 1
+        value:  "0x07"
+
+      - type: data_window
+        name: "0x381 after inject (t+6s onward): 11 22 33 44"
+        can_id: "0x381"
+        after_sec:  6
+        skip_count: 3       # discard 3 in-flight old-data frames (one per page)
+        expected: ["0x11", "0x22", "0x33", "0x44",
+                   "0x00", "0x00", "0x00", "0x00"]
+
+  # ---------------------------------------------------------------------------
+  # TC-RT-02: Single inject — confirm before and after with time window
+  # Signal: 0x390   Inject at t+3s -> 55 66 77 88
+  # ---------------------------------------------------------------------------
+  - name: "Runtime Inject: 0x390 before and after"
+    description: >
+      0x390 starts all-zero.  At t+3s inject 55 66 77 88.
+      Window t=0 -> t+2s must be all-zero (before inject).
+      Window after t+4s (skipping 3 in-flight) must carry the new pattern.
+    runtime_inject:
+      - can_id:    "0x390"
+        delay_sec: 3
+        data: ["0x55", "0x66", "0x77", "0x88",
+               "0x00", "0x00", "0x00", "0x00"]
+    checks:
+      - type: data_window
+        name: "0x390 before inject (t=0 -> t+2s): all zero"
+        can_id: "0x390"
+        after_sec:  0
+        before_sec: 2
+        expected: ["0x00", "0x00", "0x00", "0x00",
+                   "0x00", "0x00", "0x00", "0x00"]
+
+      - type: data_window
+        name: "0x390 after inject (t+4s onward): 55 66 77 88"
+        can_id: "0x390"
+        after_sec:  4
+        skip_count: 3       # discard 3 in-flight old-data frames (one per page)
+        expected: ["0x55", "0x66", "0x77", "0x88",
+                   "0x00", "0x00", "0x00", "0x00"]
+
+      - type: interval
+        name: "0x390 interval ~ 1000 ms"
+        can_id: "0x390"
+        expected_ms:  1000
+        tolerance_ms: 50
+
+  # ---------------------------------------------------------------------------
+  # TC-RT-03: Two sequential injects — verify three distinct data phases
+  # Signal: 0x3E7   Inject 1 at t+5s -> AA BB CC DD
+  #                 Inject 2 at t+12s -> FF EE DD CC
+  # ---------------------------------------------------------------------------
+  - name: "Runtime Inject: 0x3E7 two sequential changes"
+    description: >
+      0x3E7 starts all-zero.
+      First inject at t+5s -> AA BB CC DD.
+      Second inject at t+12s -> FF EE DD CC.
+      Three data_window checks cover each phase independently.
+      skip_count: 3 discards in-flight frames at each phase boundary.
+    runtime_inject:
+      - can_id:    "0x3E7"
+        delay_sec: 5
+        data:
+          ["0xAA", "0xBB", "0xCC", "0xDD",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00"]
+      - can_id:    "0x3E7"
+        delay_sec: 12
+        data:
+          ["0xFF", "0xEE", "0xDD", "0xCC",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00",
+           "0x00", "0x00", "0x00", "0x00"]
+    checks:
+      # Phase 1: before first inject — default all-zero (no skip needed, no inject boundary)
+      - type: data_window
+        name: "0x3E7 phase 1 (t=0 -> t+4s): default all-zero"
+        can_id: "0x3E7"
+        after_sec:  0
+        before_sec: 4
+        expected: ["0x00", "0x00", "0x00", "0x00",
+                   "0x00", "0x00", "0x00", "0x00"]
+
+      # Phase 2: after first inject, before second inject — AA BB CC DD
+      # skip_count: 3 handles in-flight frames from phase 1
+      # before_sec: 11 closes the window before the second inject at t+12s
+      - type: data_window
+        name: "0x3E7 phase 2 (t+6s -> t+11s): AA BB CC DD"
+        can_id: "0x3E7"
+        after_sec:  6
+        before_sec: 11
+        skip_count: 3
+        expected: ["0xAA", "0xBB", "0xCC", "0xDD",
+                   "0x00", "0x00", "0x00", "0x00"]
+
+      # Phase 3: after second inject — FF EE DD CC
+      # skip_count: 3 handles in-flight frames from phase 2
+      - type: data_window
+        name: "0x3E7 phase 3 (t+13s onward): FF EE DD CC"
+        can_id: "0x3E7"
+        after_sec:  13
+        skip_count: 3
+        expected: ["0xFF", "0xEE", "0xDD", "0xCC",
+                   "0x00", "0x00", "0x00", "0x00"]
+
+      - type: interval
+        name: "0x3E7 interval ~ 1000 ms"
+        can_id: "0x3E7"
+        expected_ms:  1000
+        tolerance_ms: 50

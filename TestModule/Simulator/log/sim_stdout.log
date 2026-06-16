@@ -1,0 +1,178 @@
+]0;SimulatorWelcome Simulator v0.4
+[sim_config] channel_count=3, transmit_interval=1 ms
+  Ch1: port=5000  can_file=input/tx_CANFD_G2M-1_BUS.can
+  Ch2: port=5001  can_file=input/tx_CANFD_G2M-2_BUS.can
+  Ch3: port=5002  can_file=input/tx_CANFD_G5M_BUS.can
+[Scheduler Thread] Started (Sleep=1ms, time-based)
+[main] Ch1: TCP server at 127.0.0.1:5000
+[main] Ch2: TCP server at 127.0.0.1:5001
+[main] Ch3: TCP server at 127.0.0.1:5002
+[TX Transmit] Thread started (3 ch, interval: 1 ms).
+[Poll Thread] Started
+
+=================================
+Ch1: disconnected | TX:OFF |   9 msg | port 5000 
+Ch2: disconnected | TX:OFF |   1 msg | port 5001 
+Ch3: disconnected | TX:OFF |   1 msg | port 5002 
+---------------------------------
+RX: ON
+---------------------------------
+1. View TX message list
+2. Edit TX message
+3. Start TX
+4. Stop TX
+5. Start RX
+6. Stop RX
+0. Shutdown Simulator
+Select: Select channel (1-3, 0=All): [Menu] TX ALL enabled
+
+=================================
+Ch1: disconnected | TX:ON  |   9 msg | port 5000 
+Ch2: disconnected | TX:ON  |   1 msg | port 5001 
+Ch3: disconnected | TX:ON  |   1 msg | port 5002 
+---------------------------------
+RX: ON
+---------------------------------
+1. View TX message list
+2. Edit TX message
+3. Start TX
+4. Stop TX
+5. Start RX
+6. Stop RX
+0. Shutdown Simulator
+Select: Select channel (1-3): [Edit] Ch1: Enter message number (1..9): [Edit] Current message:
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| No. | Label    | Name                 | ID     | Cycle | Len | Data                                             |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| 7   | ZN21S13  | ZN21S13              | 0x0390 | 1000  | 8   | 00 00 00 00 00 00 00 00                          |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+[Edit] Enter new data (8 bytes, format: "01 02 AB ..."): [Edit] Message updated:
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| No. | Label    | Name                 | ID     | Cycle | Len | Data                                             |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| 7   | ZN21S13  | ZN21S13              | 0x0390 | 1000  | 8   | 55 66 77 88 00 00 00 00                          |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+
+=================================
+Ch1: connected    | TX:ON  |   9 msg | port 5000 
+Ch2: connected    | TX:ON  |   1 msg | port 5001 
+Ch3: connected    | TX:ON  |   1 msg | port 5002 
+---------------------------------
+RX: ON
+---------------------------------
+1. View TX message list
+2. Edit TX message
+3. Start TX
+4. Stop TX
+5. Start RX
+6. Stop RX
+0. Shutdown Simulator
+Select: 
+[Server] Ch1: Client connected.
+
+[Server] Ch2: Client connected.
+
+[Server] Ch3: Client connected.
+
+=================================
+Ch1: connected    | TX:ON  |   9 msg | port 5000 
+Ch2: connected    | TX:ON  |   1 msg | port 5001 
+Ch3: connected    | TX:ON  |   1 msg | port 5002 
+---------------------------------
+RX: ON
+---------------------------------
+1. View TX message list
+2. Edit TX message
+3. Start TX
+4. Stop TX
+5. Start RX
+6. Stop RX
+0. Shutdown Simulator
+Select: Select channel (1-3): [Edit] Ch1: Enter message number (1..9): [Edit] Current message:
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| No. | Label    | Name                 | ID     | Cycle | Len | Data                                             |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| 8   | UCB1S01  | Body Elec. User Cust | 0x03E7 | 1000  | 32  | 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |
+|     |          | omize 1              |        |       |     | 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+[Edit] Enter new data (32 bytes, format: "01 02 AB ..."): [Edit] Message updated:
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| No. | Label    | Name                 | ID     | Cycle | Len | Data                                             |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| 8   | UCB1S01  | Body Elec. User Cust | 0x03E7 | 1000  | 32  | AA BB CC DD 00 00 00 00 00 00 00 00 00 00 00 00  |
+|     |          | omize 1              |        |       |     | 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+
+=================================
+Ch1: connected    | TX:ON  |   9 msg | port 5000 
+Ch2: connected    | TX:ON  |   1 msg | port 5001 
+Ch3: connected    | TX:ON  |   1 msg | port 5002 
+---------------------------------
+RX: ON
+---------------------------------
+1. View TX message list
+2. Edit TX message
+3. Start TX
+4. Stop TX
+5. Start RX
+6. Stop RX
+0. Shutdown Simulator
+Select: Select channel (1-3): [Edit] Ch1: Enter message number (1..9): [Edit] Current message:
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| No. | Label    | Name                 | ID     | Cycle | Len | Data                                             |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| 5   | ACN1S04  | Air-conditioner rela | 0x0381 | 1000  | 32  | 00 07 00 3C 00 00 00 00 00 00 00 00 00 00 00 00  |
+|     |          | tion No.4            |        |       |     | 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+[Edit] Enter new data (32 bytes, format: "01 02 AB ..."): [Edit] Message updated:
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| No. | Label    | Name                 | ID     | Cycle | Len | Data                                             |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| 5   | ACN1S04  | Air-conditioner rela | 0x0381 | 1000  | 32  | 11 22 33 44 00 00 00 00 00 00 00 00 00 00 00 00  |
+|     |          | tion No.4            |        |       |     | 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+
+=================================
+Ch1: connected    | TX:ON  |   9 msg | port 5000 
+Ch2: connected    | TX:ON  |   1 msg | port 5001 
+Ch3: connected    | TX:ON  |   1 msg | port 5002 
+---------------------------------
+RX: ON
+---------------------------------
+1. View TX message list
+2. Edit TX message
+3. Start TX
+4. Stop TX
+5. Start RX
+6. Stop RX
+0. Shutdown Simulator
+Select: Select channel (1-3): [Edit] Ch1: Enter message number (1..9): [Edit] Current message:
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| No. | Label    | Name                 | ID     | Cycle | Len | Data                                             |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| 8   | UCB1S01  | Body Elec. User Cust | 0x03E7 | 1000  | 32  | AA BB CC DD 00 00 00 00 00 00 00 00 00 00 00 00  |
+|     |          | omize 1              |        |       |     | 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+[Edit] Enter new data (32 bytes, format: "01 02 AB ..."): [Edit] Message updated:
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| No. | Label    | Name                 | ID     | Cycle | Len | Data                                             |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+| 8   | UCB1S01  | Body Elec. User Cust | 0x03E7 | 1000  | 32  | FF EE DD CC 00 00 00 00 00 00 00 00 00 00 00 00  |
+|     |          | omize 1              |        |       |     | 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |
++-----+----------+----------------------+--------+-------+-----+--------------------------------------------------+
+
+=================================
+Ch1: connected    | TX:ON  |   9 msg | port 5000 
+Ch2: connected    | TX:ON  |   1 msg | port 5001 
+Ch3: connected    | TX:ON  |   1 msg | port 5002 
+---------------------------------
+RX: ON
+---------------------------------
+1. View TX message list
+2. Edit TX message
+3. Start TX
+4. Stop TX
+5. Start RX
+6. Stop RX
+0. Shutdown Simulator
+Select: 
