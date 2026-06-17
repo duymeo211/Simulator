@@ -55,6 +55,18 @@ def load_yaml(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def load_config(config_path: str, duration_override: float = None) -> dict:
+    cfg      = load_yaml(config_path)
+    settings = cfg.get("settings", {})
+    return {
+        "tests":       cfg.get("tests", []),
+        "run_sec":     duration_override or settings.get("run_duration_sec", 15),
+        "startup_sec": settings.get("startup_delay_sec", 5),
+        "connect_sec": settings.get("connect_delay_sec", 5),
+        "vsoc_log":    os.path.join(BASE_DIR, settings.get("vsoc_log", "vSoC/rx_debug.log")),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Clear old log (rotate, do not delete — keep one backup)
 # ---------------------------------------------------------------------------
@@ -70,82 +82,86 @@ def clear_vsoc_log(log_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shared stack runner
+# ---------------------------------------------------------------------------
+
+def _run_stack(tests: list, run_sec: float, startup_sec: float,
+               connect_sec: float, vsoc_log: str) -> None:
+    """Start simulator stack, fire injections, wait, then stop."""
+    pm = ProcessManager(
+        base_dir      = BASE_DIR,
+        startup_delay = startup_sec,
+        connect_delay = connect_sec,
+    )
+
+    print("[Setup] Cleaning up stale processes...")
+    pm.stop_all()
+    time.sleep(1)
+    clear_vsoc_log(vsoc_log)
+
+    print("[Setup] Starting stack...")
+    pm.start_all()
+
+    rt_threads = []
+    for test_def in tests:
+        for rt in test_def.get("runtime_inject", []):
+            can_id = int(rt["can_id"], 16) if isinstance(rt["can_id"], str) \
+                     else int(rt["can_id"])
+            data   = [int(v, 16) if isinstance(v, str) else int(v)
+                      for v in rt["data"]]
+            delay  = float(rt.get("delay_sec", 5.0))
+            label  = test_def.get("name", "?")
+
+            def _inject(pm=pm, can_id=can_id, data=data,
+                        delay=delay, label=label):
+                time.sleep(delay)
+                print(f"[Runtime] Injecting 0x{can_id:03X} for '{label}' at t+{delay}s  "
+                      f"data=[{' '.join(f'0x{b:02X}' for b in data)}]")
+                pm.send_edit(can_id, data)
+
+            t = threading.Thread(target=_inject, daemon=True)
+            t.start()
+            rt_threads.append(t)
+
+    injections = sum(len(td.get("runtime_inject", [])) for td in tests)
+    print(f"[Setup] Running {run_sec}s — {injections} injection(s) scheduled...")
+    time.sleep(run_sec)
+
+    for t in rt_threads:
+        t.join(timeout=2)
+
+    print("[Setup] Stopping all processes...")
+    pm.stop_all()
+
+
+# ---------------------------------------------------------------------------
 # Main test loop
 # ---------------------------------------------------------------------------
+
+def run_inject_only(config_path: str, duration_override: float = None) -> int:
+    """Start the stack, fire runtime injections, then stop. No log parsing."""
+    c = load_config(config_path, duration_override)
+    _run_stack(c["tests"], c["run_sec"], c["startup_sec"], c["connect_sec"], c["vsoc_log"])
+    print("[Setup] Done. Log not parsed (inject-only mode).")
+    return 0
+
 
 def run_tests(config_path: str,
               parse_only:  bool  = False,
               duration_override: float = None) -> int:
 
-    cfg      = load_yaml(config_path)
-    settings = cfg.get("settings", {})
-    tests    = cfg.get("tests", [])
-
-    run_sec      = duration_override or settings.get("run_duration_sec", 15)
-    startup_sec  = settings.get("startup_delay_sec", 5)
-    connect_sec  = settings.get("connect_delay_sec", 5)
-    vsoc_log_rel = settings.get("vsoc_log", "vSoC/rx_debug.log")
-    vsoc_log     = os.path.join(BASE_DIR, vsoc_log_rel)
-    results_dir  = os.path.join(BASE_DIR, "Results")
+    c = load_config(config_path, duration_override)
+    tests, run_sec, startup_sec, connect_sec, vsoc_log = (
+        c["tests"], c["run_sec"], c["startup_sec"], c["connect_sec"], c["vsoc_log"]
+    )
+    results_dir = os.path.join(BASE_DIR, "Results")
 
     console = ConsoleReporter(color=True)
     console.suite_header(len(tests))
 
-    # -----------------------------------------------------------------------
-    # 1. Run the stack (unless --parse-only)
-    # -----------------------------------------------------------------------
     if not parse_only:
-        pm = ProcessManager(
-            base_dir      = BASE_DIR,
-            startup_delay = startup_sec,
-            connect_delay = connect_sec,
-        )
-
-        # Kill any stale instances from previous run
-        print("[Setup] Cleaning up stale processes...")
-        pm.stop_all()
-        time.sleep(1)
-
-        # Rotate old vSoC log so we only analyse fresh data
-        clear_vsoc_log(vsoc_log)
-
-        print("[Setup] Starting stack...")
-        pm.start_all()
-
-        # Schedule runtime data injections in background threads.
-        # Each runtime_inject entry fires at `delay_sec` into the run.
-        rt_threads = []
-        for test_def in tests:
-            for rt in test_def.get("runtime_inject", []):
-                can_id = int(rt["can_id"], 16) if isinstance(rt["can_id"], str) \
-                         else int(rt["can_id"])
-                data   = [int(v, 16) if isinstance(v, str) else int(v)
-                          for v in rt["data"]]
-                delay  = float(rt.get("delay_sec", 5.0))
-                label  = test_def.get("name", "?")
-
-                def _inject(pm=pm, can_id=can_id, data=data,
-                            delay=delay, label=label):
-                    time.sleep(delay)
-                    print(f"[Runtime] Injecting 0x{can_id:03X} for '{label}' "
-                          f"at t+{delay}s")
-                    pm.send_edit(can_id, data)
-
-                t = threading.Thread(target=_inject, daemon=True)
-                t.start()
-                rt_threads.append(t)
-
-        print(f"[Setup] Running for {run_sec}s — collecting CAN data...")
-        time.sleep(run_sec)
-
-        # Wait for any pending inject threads to finish
-        for t in rt_threads:
-            t.join(timeout=2)
-
-        print("[Setup] Stopping all processes...")
-        pm.stop_all()
-
-        print(f"[Setup] Waiting for log flush...")
+        _run_stack(tests, run_sec, startup_sec, connect_sec, vsoc_log)
+        print("[Setup] Waiting for log flush...")
         time.sleep(2)
     else:
         print("[Setup] --parse-only mode: skipping process execution\n")
@@ -216,9 +232,18 @@ def main() -> int:
         "--parse-only", action="store_true",
         help="Skip launching processes; parse existing vSoC log only")
     parser.add_argument(
+        "--inject-only", action="store_true",
+        help="Start stack, fire runtime injections, then stop — skip log parsing")
+    parser.add_argument(
         "--duration", type=float, default=None,
         help="Override run duration in seconds")
     args = parser.parse_args()
+
+    if args.inject_only:
+        return run_inject_only(
+            config_path       = args.config,
+            duration_override = args.duration,
+        )
 
     return run_tests(
         config_path       = args.config,
