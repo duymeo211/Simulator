@@ -3,9 +3,9 @@ import time
 import sys
 
 # --- CẤU HÌNH TEST ---
-_TX_COMMANDS    = b"3\n1\n"              # TX on (3) → channel 1 (1)
-_LOGCAT_FILTER  = "CustomVehicleHardware"  # keyword trong message để lọc log
-_CAN_ID         = "0x382"                  # CAN ID cần theo dõi
+_TX_COMMANDS    = b"3\n1\n"                # TX on (3) → channel 1 (1)
+_LOGCAT_FILTER  = "CustomVehicleHardware"  # filter log 
+_CAN_ID         = "0x390"                  # filter CAN ID 
 
 def run_command_background(cmd):
     # Khởi chạy một tiến trình ngầm không làm treo script Python
@@ -16,14 +16,6 @@ def run_command_background(cmd):
         stderr=subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
     )
-def run_command_with_background(cmd):
-    # Mở cửa sổ terminal mới và chạy lệnh trong đó (có thể thấy output)
-    # shell=False để CREATE_NEW_CONSOLE áp dụng trực tiếp lên exe, không qua cmd.exe
-    return subprocess.Popen(
-        cmd,
-        shell=False,
-        creationflags=subprocess.CREATE_NEW_CONSOLE
-    )
 
 def is_android_booted():
     result = subprocess.run("adb shell getprop sys.boot_completed", shell=True, capture_output=True, text=True)
@@ -31,7 +23,7 @@ def is_android_booted():
     stderr = result.stderr.strip()
 
     if "offline" in stderr:
-        print("  [ADB] Thiết bị offline, đang reconnect...")
+        print("  [ADB] Devices offline, reconnecting...")
         subprocess.run("adb reconnect", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return False
 
@@ -53,13 +45,13 @@ def get_emulator_serial():
 def setup_adb_forwarding():
     serial = get_emulator_serial()
     if not serial:
-        print("❌ Không tìm thấy emulator đang hoạt động trong ADB. Hủy test.")
+        print("❌ Could not find Android emulator. Cancel test.")
         result = subprocess.run("adb devices", shell=True, capture_output=True, text=True)
         print(result.stdout)
         sys.exit(1)
 
-    print(f"  [ADB] Thiết bị: {serial}")
-    print("--- Đang thiết lập ADB Port Forwarding ---")
+    print(f"  [ADB] Device: {serial}")
+    print("--- Setting ADB Port Forwarding ---")
 
     port_mappings = [
         (5003, 9001),
@@ -69,12 +61,12 @@ def setup_adb_forwarding():
 
     for local_port, device_port in port_mappings:
         command = f"adb -s {serial} forward tcp:{local_port} tcp:{device_port}"
-        print(f"Đang thực thi: {command}")
+        print(f"Executing: {command}")
         try:
             result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
-            print(f"✅ Thành công: PC:{local_port} -> Emulator:{device_port}")
+            print(f"Successfull: PC:{local_port} -> Emulator:{device_port}")
         except subprocess.CalledProcessError as e:
-            print(f"❌ Lỗi cổng {local_port}: {e.stderr.strip()}")
+            print(f"Port error {local_port}: {e.stderr.strip()}")
             sys.exit(1)
 
     print("\n--- Forward list ---")
@@ -95,7 +87,7 @@ def start_logcat_to_file(serial):
         stdout=_logcat_file,
         stderr=subprocess.STDOUT
     )
-    print(f"  [LOGCAT] Đang ghi log vào log\\logcat.txt ...")
+    print(f"  [LOGCAT] Writing log into log\\logcat.txt ...")
 
 def stop_logcat():
     global _logcat_file, _logcat_proc
@@ -115,89 +107,83 @@ def teardown():
     for proc in ["vecu_vm2.exe", "simulator.exe"]:
         subprocess.run(f"taskkill /F /IM {proc} /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run("adb emu kill", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print("Hệ thống đã dọn dẹp xong.")
+    print("Done cleaning up.")
 
 def cleanup_previous_session():
-    print("--- Dọn dẹp tiến trình cũ ---")
+    print("--- Clean old processes ---")
     for proc in ["emulator.exe", "qemu-system-x86_64.exe", "simulator.exe", "vecu_vm2.exe"]:
         subprocess.run(f"taskkill /F /IM {proc} /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(3)  # Chờ các tiến trình cũ tắt hoàn toàn
+    time.sleep(3)
     subprocess.run("adb kill-server", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
     subprocess.run("adb start-server", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
-    print("Dọn dẹp xong.\n")
+    print("Done clean.\n")
 
 def main():
     cleanup_previous_session()
-    print("--- BƯỚC 1: SETUP HỆ THỐNG ---")
+    print("--- SETUP SYSTEM ---")
     
-    # 1. Chạy CAN Simulator (stdin piped để điều khiển từ Python)
-    print("Đang khởi chạy CAN Simulator...")
+    # 1. Run CAN Simulator
+    print("Running CAN Simulator...")
     sim_proc = subprocess.Popen(
         r"C:\Development\Simulator\TestModule\Simulator\simulator.exe",
         shell=False,
         stdin=subprocess.PIPE,
         creationflags=subprocess.CREATE_NO_WINDOW
     )
-    time.sleep(2) # Chờ simulator mở port TCP
+    time.sleep(2)
     
-    # 2. Bật Android Emulator
-    # Thay 'vsoc_emu' bằng tên AVD thực tế của bạn
-    print("Đang bật Android Emulator...")
-    emulator_cmd = r"C:\Android\emulator\emulator.exe -avd vsoc_emu -no-audio -no-snapshot"
+    # 2. Enable Android Emulator
+    print("Enabling Android Emulator...")
+    emulator_cmd = r"C:\Android\emulator\emulator.exe -avd vsoc_emu -no-audio -no-snapshot -no-window"
     emu_proc = run_command_background(emulator_cmd)
     
-    # Chờ Android boot hoàn toàn (vòng lặp timeout 90 giây)
-    timeout = 500
+    # Waiting for Android boot 
+    timeout = 120
     start_time = time.time()
     while time.time() - start_time < timeout:
         if emu_proc.poll() is not None:
-            print(f"Lỗi: Android Emulator đã crash (exit code {emu_proc.returncode}). Hủy test.")
+            print(f"ERROR: Android Emulator crash (exit code {emu_proc.returncode}). Hủy test.")
             return
         if is_android_booted():
-            print("Android Emulator đã sẵn sàng!")
+            print("Android Emulator is ready!")
             break
-        print("Đang chờ Android boot...")
+        print("Waiting for Android boot...")
         time.sleep(5)
     else:
-        print("Lỗi: Android boot quá lâu. Hủy test.")
+        print("ERROR: Unable to boot Android. Cancel test.")
         return
     
-    # Chờ ADB ổn định sau khi boot xong trước khi forward port
-    print("Đang chờ ADB ổn định...")
     time.sleep(3)
     result = subprocess.run("adb devices", shell=True, capture_output=True, text=True)
     print(result.stdout.strip())
 
     setup_adb_forwarding()
 
-    # 3. Chạy vECU
-    print("Đang khởi chạy vECU...")
+    # 3. Run vMCU
+    print("Running vMCU...")
     vecu_proc = subprocess.Popen(
         [r"C:\Development\Simulator\TestModule\vECU\vecu_vm2.exe", "config.ini"],
         shell=False,
         cwd=r"C:\Development\Simulator\TestModule\vECU",
         creationflags=subprocess.CREATE_NEW_CONSOLE
     )
-    time.sleep(5) # Chờ các bên thiết lập kết nối TCP với nhau
+    time.sleep(5) 
 
-    print("\n--- BƯỚC 2: THỰC THI KIỂM THỬ ---")
+    print("\n--- TESTING EXECUTION ---")
     serial = get_emulator_serial()
     try:
-        print("Đang chạy các test case...")
-
+        print("Test running...")
         start_logcat_to_file(serial)
-
-        # Kích hoạt simulator: TX on (3) → channel 1 (1)
-        print("Gửi lệnh tới simulator...")
+        print("Sending command to simulator...")
         sim_proc.stdin.write(_TX_COMMANDS)
         sim_proc.stdin.flush()
-        print("Đang thu thập log CAN... kiểm tra log\\logcat.txt để xem kết quả.")
+        print("Collecting data from adb logcat...")
         time.sleep(50)
 
     except Exception as e:
-        print(f"Lỗi trong quá trình test: {e}")
+        print(f"Error found: {e}")
 
     finally:
         teardown()
