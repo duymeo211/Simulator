@@ -2,13 +2,12 @@ import subprocess
 import time
 import sys
 
-# --- CẤU HÌNH TEST ---
+# --- SETUP TEST ---
 _TX_COMMANDS    = b"3\n1\n"                # TX on (3) → channel 1 (1)
 _LOGCAT_FILTER  = "CustomVehicleHardware"  # filter log 
 _CAN_ID         = "0x390"                  # filter CAN ID 
 
 def run_command_background(cmd):
-    # Khởi chạy một tiến trình ngầm không làm treo script Python
     return subprocess.Popen(
         cmd,
         shell=True,
@@ -174,13 +173,29 @@ def main():
     print("\n--- TESTING EXECUTION ---")
     serial = get_emulator_serial()
     try:
-        print("Test running...")
-        start_logcat_to_file(serial)
+        # Enable TX on simulator
         print("Sending command to simulator...")
         sim_proc.stdin.write(_TX_COMMANDS)
         sim_proc.stdin.flush()
-        print("Collecting data from adb logcat...")
-        time.sleep(50)
+
+        # Start ADB logcat capture (manual review)
+        start_logcat_to_file(serial)
+
+        # Load and run YAML test case
+        import yaml
+        from test_runner import run_test_case, ConsoleReporter, write_text_report
+
+        test_case_path = r"C:\Development\Simulator\test_cases\runtime_inject.yaml"
+        with open(test_case_path, encoding="utf-8") as f:
+            test_case = yaml.safe_load(f)
+
+        result = run_test_case(sim_proc, test_case)
+
+        # Report to console and text file
+        reporter = ConsoleReporter()
+        reporter.test_result(result, 1, 1)
+        report_path = write_text_report([result], r"C:\Development\Simulator\log")
+        print(f"Report saved: {report_path}")
 
     except Exception as e:
         print(f"Error found: {e}")
