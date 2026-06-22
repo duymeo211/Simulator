@@ -1,8 +1,8 @@
 /**
  * @file    main.c
  * @brief   Simulator main entry: multi-channel CAN TX over TCP.
- * Scheduler + Poll in dedicated threads.
- * Main thread only handles menu + connection change display.
+ *          Scheduler + Poll in dedicated threads.
+ *          Main thread only handles menu + connection change display.
  * @date    2026-04
  * @modified 2026-06
  */
@@ -20,17 +20,14 @@
 #include "log_utils.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <signal.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <unistd.h>
-#include <pthread.h>
 #endif
 
 /* ================================================================== */
@@ -70,14 +67,6 @@ static HANDLE s_rx_ps_process = NULL;
 
 static TxSchedulerThread sched_thread = { 0 };
 static ServerPollCtx     poll_ctx = { 0 };
-
-static volatile sig_atomic_t s_shutdown_req = 0;
-
-static void sigint_handler(int signum)
-{
-    (void)signum;
-    s_shutdown_req = 1;
-}
 
 /* ================================================================== */
 /* Static helpers                                                      */
@@ -143,178 +132,6 @@ static void on_rx(const uint8_t* data, size_t len, void* user)
 }
 
 /* ================================================================== */
-/* Automation Thread: Listens to stdin for data injection commands     */
-/* ================================================================== */
-
-#ifdef _WIN32
-/* Read one line directly from a Win32 pipe handle, bypassing the CRT
- * internal buffer.  PeekNamedPipe + ReadFile must operate on the same
- * handle — mixing PeekNamedPipe (Win32) with fgets (CRT) is wrong
- * because the CRT pre-reads ahead into its own buffer, making
- * PeekNamedPipe report 0 bytes even though data is already consumed
- * and waiting in the CRT buffer.
- *
- * Returns true  if a non-empty line was placed in buf[].
- * Returns false if the pipe has no data yet (caller should sleep+retry).
- * Sets *eof = true on pipe close or hard error so the caller can exit.
- */
-static bool pipe_read_line(HANDLE h, char* buf, int bufsize, bool* eof)
-{
-    DWORD avail = 0;
-    *eof = false;
-
-    if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL))
-    {
-        *eof = true;   /* pipe closed by writer */
-        return false;
-    }
-    if (avail == 0)
-        return false;  /* no data yet */
-
-    int  pos = 0;
-    DWORD nr;
-    char  ch;
-
-    while (pos < bufsize - 1)
-    {
-        if (!ReadFile(h, &ch, 1, &nr, NULL) || nr == 0)
-        {
-            *eof = true;
-            break;
-        }
-        if (ch == '\r') continue;   /* strip Windows \r\n → \n */
-        buf[pos++] = ch;
-        if (ch == '\n') break;
-    }
-    buf[pos] = '\0';
-    return pos > 0;
-}
-#endif /* _WIN32 */
-
-#ifdef _WIN32
-static DWORD WINAPI auto_cmd_thread_func(LPVOID param)
-#else
-static void* auto_cmd_thread_func(void* param)
-#endif
-{
-    SimulatorCtrl* ctrl = (SimulatorCtrl*)param;
-    char line[1024];
-
-#ifdef _WIN32
-    HANDLE hStdin  = GetStdHandle(STD_INPUT_HANDLE);
-    BOOL   is_pipe = (GetFileType(hStdin) == FILE_TYPE_PIPE);
-#endif
-
-    while (!s_shutdown_req && ctrl->running)
-    {
-#ifdef _WIN32
-        if (is_pipe)
-        {
-            bool eof = false;
-            if (!pipe_read_line(hStdin, line, sizeof(line), &eof))
-            {
-                if (eof) break;
-                Sleep(1);
-                continue;
-            }
-        }
-        else
-        {
-            if (fgets(line, sizeof(line), stdin) == NULL) break;
-        }
-#else
-        if (fgets(line, sizeof(line), stdin) == NULL) break;
-#endif
-
-        /* Command format: INJECT <Channel_1_based> <CAN_ID> <Hex_Data...> */
-        if (strncmp(line, "INJECT ", 7) == 0)
-        {
-            char* p = line + 7;
-            char* next_p = NULL;
-            int ch;
-            uint32_t id;
-            uint8_t new_data[128];
-            int count = 0;
-
-            /* 1. Parse Channel */
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == '\0') continue;
-            ch = atoi(p) - 1; 
-            while (*p && *p != ' ' && *p != '\t') p++; 
-
-            if (ch < 0 || ch >= ctrl->sim_cfg.channel_count) continue;
-
-            /* 2. Parse CAN ID */
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == '\0') continue;
-            
-            id = (uint32_t)strtoul(p, &next_p, 0);
-            if (p == next_p) continue;
-            p = next_p;
-
-            /* 3. Parse Data Hex */
-            while (1)
-            {
-                while (*p == ' ' || *p == '\t') p++;
-                if (*p == '\0' || *p == '\r' || *p == '\n') break;
-                
-                unsigned long val = strtoul(p, &next_p, 16);
-                
-                if (p == next_p)
-                {
-                    while (*p && *p != ' ' && *p != '\t') p++;
-                }
-                else
-                {
-                    if (count < (int)sizeof(new_data))
-                    {
-                        new_data[count++] = (uint8_t)val;
-                    }
-                    p = next_p;
-                }
-            }
-
-            /* 4. TỐI ƯU HÓA: Tìm kiếm index trước khi khóa (Giảm Lock Time) */
-            int target_idx = -1;
-            for (int m = 0; m < ctrl->tx_lists[ch].message_count; m++)
-            {
-                if (ctrl->tx_lists[ch].messages[m].id == id)
-                {
-                    target_idx = m;
-                    break;
-                }
-            }
-
-            if (target_idx >= 0)
-            {
-                int max_copy = count;
-                if (max_copy > ctrl->tx_lists[ch].messages[target_idx].length)
-                    max_copy = ctrl->tx_lists[ch].messages[target_idx].length;
-                if (max_copy > (int)sizeof(new_data))
-                    max_copy = (int)sizeof(new_data);
-
-                /* 5. CRITICAL SECTION SIÊU NGẮN (Chỉ vài Nano-giây) */
-                sim_mutex_lock(&ctrl->tx_list_mutex[ch]);
-                memcpy(ctrl->tx_lists[ch].messages[target_idx].data, new_data, max_copy);
-                sim_mutex_unlock(&ctrl->tx_list_mutex[ch]);
-
-                /* Write outside the lock; use stderr to avoid blocking the stdout pipe */
-                fprintf(stderr, "[Auto] Injected Ch%d ID=0x%04X (%d bytes)\n", ch+1, id, max_copy);
-            }
-            else
-            {
-                fprintf(stderr, "[Auto] Failed: ID 0x%04X not found in Ch%d\n", id, ch+1);
-            }
-        }
-    }
-#ifdef _WIN32
-    return 0;
-#else
-    return NULL;
-#endif
-}
-
-/* ================================================================== */
 /* Server Poll Thread — accept + recv for all channels                 */
 /* ================================================================== */
 
@@ -353,7 +170,7 @@ static void* server_poll_thread_func(void* param)
 /* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
-int main(int argc, char* argv[])
+int main(void)
 {
     static SimulatorCtrl ctrl = { 0 };
     static TxScheduler   scheds[SIM_MAX_CHANNELS] = { 0 };
@@ -365,7 +182,6 @@ int main(int argc, char* argv[])
     bool            prev_ch_connected[SIM_MAX_CHANNELS] = { false };
     int             ch_count = 0;
     int             i;
-    bool            auto_mode = false;
 
     FILE* rx_log = NULL;
     RxChannelUser rx_users[SIM_MAX_CHANNELS] = { 0 };
@@ -378,17 +194,6 @@ int main(int argc, char* argv[])
 #endif
 
     printf("Welcome Simulator v0.4\n");
-
-    /* -------------------------------------------------------------- */
-    /* Parse command line arguments                                    */
-    /* -------------------------------------------------------------- */
-    for (i = 1; i < argc; i++)
-    {
-        if (strcmp(argv[i], "--auto") == 0 || strcmp(argv[i], "--headless") == 0)
-        {
-            auto_mode = true;
-        }
-    }
 
     /* -------------------------------------------------------------- */
     /* Prepare log folder                                              */
@@ -419,7 +224,7 @@ int main(int argc, char* argv[])
     }
 
 #ifdef _WIN32
-    if (rx_log != NULL && !auto_mode)
+    if (rx_log != NULL)
     {
         STARTUPINFOA        si;
         PROCESS_INFORMATION pi;
@@ -587,50 +392,23 @@ int main(int argc, char* argv[])
     }
 
 #ifdef _WIN32
-    if (!auto_mode) resize_window("TX Log", 1000, 250);
+    resize_window("TX Log", 1000, 250);
 #endif
 
     /* Global lifecycle: RUNNING */
     sim_set_state(SIM_STATE_RUNNING);
 
-    /* Setup Ctrl+C signal handler for graceful shutdown in automation */
-    signal(SIGINT, sigint_handler);
-
     /* -------------------------------------------------------------- */
-    /* Print menu or start auto mode                                   */
+    /* Print menu                                                      */
     /* -------------------------------------------------------------- */
-    if (auto_mode)
-    {
-        printf("\n[main] --- AUTO MODE ENABLED ---\n");
-        printf("[main] Menu is disabled. TX and RX automatically started.\n");
-        printf("[main] Listening on Stdin for API Inject Commands...\n");
-        printf("[main] Press Ctrl+C or send SIGINT to stop the simulator.\n\n");
-        
-        ctrl.rx_enabled = true;
-        for (i = 0; i < ch_count; i++)
-        {
-            ctrl.tx_enabled[i] = true;
-        }
-
-        /* Khởi tạo luồng lắng nghe Stdin cho C-API */
-#ifdef _WIN32
-        CreateThread(NULL, 0, auto_cmd_thread_func, &ctrl, 0, NULL);
-#else
-        pthread_t t_id;
-        pthread_create(&t_id, NULL, auto_cmd_thread_func, &ctrl);
-#endif
-    }
-    else
-    {
-        menu_print(&ctrl);
-    }
+    menu_print(&ctrl);
 
     /* ============================================================== */
     /* Main loop — only menu + connection change display              */
     /* TX Scheduler, TX Transmit, TCP Poll all run in their own       */
     /* threads                                                        */
     /* ============================================================== */
-    while (ctrl.running && !s_shutdown_req)
+    while (ctrl.running)
     {
         int  choice = -1;
         bool any_change = false;
@@ -657,19 +435,16 @@ int main(int argc, char* argv[])
 
         if (any_change)
         {
-            if (!auto_mode) menu_print(&ctrl);
+            menu_print(&ctrl);
         }
 
-        if (!auto_mode)
+        /* Menu input (can block — no longer affects TX or RX) */
+        if (menu_try_read_choice(&choice))
         {
-            /* Menu input (can block — no longer affects TX or RX) */
-            if (menu_try_read_choice(&choice))
+            menu_handle_choice(choice, &ctrl);
+            if (ctrl.running)
             {
-                menu_handle_choice(choice, &ctrl);
-                if (ctrl.running && !s_shutdown_req)
-                {
-                    menu_print(&ctrl);
-                }
+                menu_print(&ctrl);
             }
         }
 
