@@ -97,7 +97,7 @@ def teardown(sim_proc=None):
             sim_proc.wait(timeout=5)
         except Exception as e:
             print(f"Force killing simulator due to timeout: {e}")
-            subprocess.run("taskkill /F /IM simulator.exe /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run("taskkill /F /IM CanSimulatorCs.exe /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
     # Tắt các tiến trình còn lại
     for proc in ["vecu_vm2.exe"]:
@@ -107,7 +107,7 @@ def teardown(sim_proc=None):
 
 def cleanup_previous_session():
     print("--- Clean old processes ---")
-    for proc in ["emulator.exe", "qemu-system-x86_64.exe", "simulator.exe", "vecu_vm2.exe"]:
+    for proc in ["emulator.exe", "qemu-system-x86_64.exe", "CanSimulatorCs.exe", "vecu_vm2.exe"]:
         subprocess.run(f"taskkill /F /IM {proc} /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(3)
     subprocess.run("adb kill-server", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -123,7 +123,7 @@ def main():
     # 1. Run CAN Simulator in AUTO MODE
     print("Running CAN Simulator in Auto Mode...")
     sim_proc = subprocess.Popen(
-        [r"C:\Development\Simulator\TestModule\Simulator\simulator.exe", "--auto"],
+        [r"C:\Development\CanSimulatorCsv2.2\CanSimulatorCs\CanSimulatorCs.exe", "--auto"],
         shell=False,
         stdin=subprocess.PIPE,
         text=True, 

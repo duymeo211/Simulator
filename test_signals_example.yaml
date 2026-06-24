@@ -1,0 +1,154 @@
+# # ---------------------------------------------------------------------------
+# # TC-01:
+# # ---------------------------------------------------------------------------
+# - name: "Air-Outlet State - Face level"
+#   description: "Set to FACE level"
+#   channel: 1                 # 1=G2M-1, 2=G2M-2, 3=G5M
+#   message: "0x381"
+#   send_signals:
+#     I_OLET_D: 1
+#   expect_signals:
+#     I_OLET_D: 1
+#   expect_ui:
+#     - resource_id: "com.dten.vehicle:id/btnDirFace"
+#       selected: true
+#   timeout: 10000
+
+# # ---------------------------------------------------------------------------
+# # TC-02:
+# # ---------------------------------------------------------------------------
+# - name: "Air-Outlet State - Bi Level"
+#   description: "Set Air blow to body level"
+#   channel: 1
+#   can_id: "0x381"
+#   send_signals:
+#     I_OLET_D: 4
+#   expect_signals:
+#     I_OLET_D: 4
+#   expect_ui:
+#     - resource_id: "com.dten.vehicle:id/btnDirBoth"
+#       selected: true
+#   timeout: 10000
+
+# # ---------------------------------------------------------------------------
+# # TC-02:
+# # ---------------------------------------------------------------------------
+# - name: "Air-Outlet State - Foot Level"
+#   description: "Set Air blow to Foot level"
+#   channel: 1
+#   can_id: "0x381"
+#   send_signals:
+#     I_OLET_D: 2
+#   expect_signals:
+#     I_OLET_D: 2
+#   expect_ui:
+#     - resource_id: "com.dten.vehicle:id/btnDirFloor"
+#       selected: true
+#   timeout: 10000
+
+# # ---------------------------------------------------------------------------
+# # TC-03
+# # ---------------------------------------------------------------------------
+# - name: "Defrost shows on screen"
+#   description: "Inject I_DEF=1, I_RRDEF=1 and verify the HVAC UI reacts"
+#   channel: 1
+#   message: "ACN1S04"
+#   send_signals:
+#     I_DEF: 1
+#     I_RRDEF: 1
+#   expect_ui:
+#     - resource_id: "com.dten.vehicle:id/btnDefrostFront"
+#       selected: true
+
+#     - resource_id: "com.dten.vehicle:id/btnDefrostRear"
+#       selected: true
+#   timeout: 10000
+
+# # ---------------------------------------------------------------------------
+# # TC-04
+# # ---------------------------------------------------------------------------
+# - name: "Test SYNC button"
+#   description: "Enable SYNC button"
+#   channel: 1
+#   can_id: "0x381"            # ACN1S04
+#   send_signals:
+#     I_DUSY: 1
+#   expect_signals:            # logcat / CAN side
+#     I_DUSY: 1
+#   expect_ui:                 # screen side
+#     - resource_id: "com.dten.vehicle:id/btnDual"
+#       selected: true
+#   timeout: 10000
+
+# ---------------------------------------------------------------------------
+# TC-04: test VHAL
+# ---------------------------------------------------------------------------
+- name: "Test SYNC button"
+  description: "Enable SYNC button"
+  channel: 1
+  can_id: "0x381"            # ACN1S04
+  send_signals:
+    I_DUSY: 1
+  expect_vhal:                
+    - property: "HVAC_DUAL_ON"
+      area: ROW_1_LEFT
+      value: true
+  timeout: 10000
+# ---------------------------------------------------------------------------
+# TC-03: test VHAL
+# ---------------------------------------------------------------------------
+- name: "Defrost shows on screen"
+  description: "Inject I_DEF=1, I_RRDEF=1 and verify the HVAC UI reacts"
+  channel: 1
+  message: "ACN1S04"
+  send_signals:
+    I_DEF: 1
+  expect_vhal:                
+    - property: "HVAC_DEFROSTER"
+      area: ROW_1_LEFT
+      value: true
+  timeout: 10000
+# ---------------------------------------------------------------------------
+# TC-05:
+# ---------------------------------------------------------------------------
+# - name: "Test Recirc State"
+#   description: "Enable Recirc button"
+#   channel: 1
+#   can_id: "0x381"            # ACN1S04
+#   send_signals:
+#     I_REC: 0
+#   expect_signals:            # logcat / CAN side
+#     I_REC: 0
+  # expect_vhal:                 # screen side
+  #   - property: "HVAC_RECIRC_ON"
+  #     area: ROW_1_LEFT
+  #     value: true
+#   timeout: 10000
+
+# # ---------------------------------------------------------------------------
+# # TC-06:
+# # ---------------------------------------------------------------------------
+# - name: "Test Recirc State"
+#   description: "Enable Recirc button"
+#   channel: 1
+#   can_id: "0x381"            # ACN1S04
+#   send_signals:
+#     I_REC: 0
+#   expect_signals:            # logcat / CAN side
+#     I_REC: 0
+#   expect_ui:                 # screen side
+#     - resource_id: "com.dten.vehicle:id/btnRecirc"
+#       selected: false
+#   timeout: 10000
+# # ---------------------------------------------------------------------------
+# # TC-06:
+# # ---------------------------------------------------------------------------
+# - name: "Set raw frame"
+#   channel: 1
+#   can_id: "0x381"
+#   send: ["0x11", "0x22", "0x33", "0x40",
+#          "0x00", "0x00", "0x00", "0x00"]
+#   expect: ["0x11", "0x22", "0x33", "0x40",
+#            "0x00", "0x00", "0x00", "0x00"]
+#   timeout: 10000
+
