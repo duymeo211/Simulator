@@ -178,7 +178,7 @@ def write_html_report(results: List[TestCaseResult],
     rows = ""
     for i, r in enumerate(results, 1):
         row_bg     = "#fff" if i % 2 == 0 else "#f8fafc"
-        chk_bg     = "#f0fdf4" if i % 2 == 0 else "#f0fdf4"
+        chk_bg     = "#f0fdf4" if i % 2 == 0 else "#eff6ff"
         verdict_bg = "#27ae60" if r.passed else "#e74c3c"
         verdict    = "PASS" if r.passed else "FAIL"
 

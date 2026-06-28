@@ -1,42 +1,36 @@
 """
-Process manager: start simulator → vSoC → vECU in the correct order,
-enable TX by piping menu commands through stdin, then stop all.
+Process manager: start the CAN simulator via CanSimulatorCs.dll (loaded
+in-process through pythonnet/CLR), then start vSoC_Test.exe and
+vecu_vm2.exe as separate console processes.
 
-How TX is enabled
------------------
-The simulator already supports automated stdin input (menu.c line 388):
+Why DLL instead of simulator.exe
+---------------------------------
+The C# SimulatorEngine is the authoritative CAN bus implementation.
+Loading it via CLR gives direct API access (EditTxData, GetTxMessages)
+without needing to parse stdin menu prompts.
 
-    if (!_isatty(_fileno(stdin)))   // stdin is a pipe → use fgets
-    {
-        fgets(line, sizeof(line), stdin);
-        *out_choice = atoi(line);
-        return true;
-    }
+Startup sequence:
+  1. Load CanSimulatorCs.dll via CLR  (lazy, first call only)
+  2. ConfigReader.Load(config.ini)
+  3. SimulatorEngine(config, base_dir).Start()
+  4. SetTxEnabled(ch, True) for all channels  (0-based channel index)
+  5. Start vSoC_Test.exe in a new console window
+  6. Start vecu_vm2.exe   in a new console window
 
-stdin is kept open as a persistent PIPE so commands can be written at
-any time during the run — enabling both startup config and runtime edits.
+Runtime edit:
+  engine.EditTxData(channel_0based, msg_index_0based, System.Byte[])
 
-Startup command sequence written immediately after Popen:
-    "3\n"  →  Start TX  (menu choice)
-    "0\n"  →  All channels
-
-Runtime edit command sequence (send_edit):
-    "2\n"           →  Edit TX
-    "{ch}\n"        →  channel number (1-based)
-    "{msg}\n"       →  message index  (1-based, order in .can file)
-    "{hex data}\n"  →  new payload as "AA BB CC ..."
-
-Start order:   simulator  →  vSoC  →  vECU
-Stop order:    taskkill /F /T /PID  (kills process tree + console window)
+Stop:
+  engine.Stop()  +  taskkill /F /T /PID for vSoC and vECU
 """
 from __future__ import annotations
 
+import configparser
 import os
 import subprocess
+import sys
 import time
 from typing import List, Optional, Tuple
-
-from .can_lookup import lookup as _can_lookup
 
 
 _EXTRA_IMAGE_NAMES: List[str] = [
@@ -49,34 +43,35 @@ _EXTRA_IMAGE_NAMES: List[str] = [
 
 class ProcessManager:
     """
-    Manages simulator.exe, vSoC_Test.exe, vecu_vm2.exe for one test run.
+    Manages the CAN simulator (via DLL) and vSoC/vECU subprocesses.
 
-    All processes are tracked by PID; stop_all() kills each tree with /T
-    which also closes the console (conhost.exe) window.
-
-    The simulator's stdin is a persistent PIPE — use send_edit() to change
-    a message's payload while the simulator is running.
+    The simulator runs in-process; vSoC_Test.exe and vecu_vm2.exe are
+    started as separate console processes tracked by PID.
     """
-
-    _TX_COMMANDS = b"3\n0\n"   # Start TX → All channels
 
     def __init__(self,
                  base_dir:      str,
                  startup_delay: float = 5.0,
                  connect_delay: float = 5.0):
         self.base_dir      = os.path.abspath(base_dir)
-        self.Sim           = os.path.join(self.base_dir, "Simulator")
         self.startup_delay = startup_delay
         self.connect_delay = connect_delay
-        self._sim_proc: "subprocess.Popen | None" = None
-        self._pids:     List[int] = []
+        self._engine        = None
+        self._channel_count = 0
+        self._pids: List[int] = []
+
+        # CLR types — populated once in _load_clr()
+        self._Array          = None
+        self._Byte           = None
+        self._ConfigReader   = None
+        self._SimulatorEngine = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def start_all(self) -> None:
-        """Start stack in order: simulator → vSoC → vECU."""
+        """Start stack in order: SimulatorEngine → vSoC → vECU."""
         self._start_simulator()
         print(f"  [PM] Waiting {self.startup_delay}s for simulator startup...")
         time.sleep(self.startup_delay)
@@ -95,48 +90,49 @@ class ProcessManager:
         """
         Change a message's payload while the simulator is running.
 
-        Looks up which channel and message index owns `can_id` from the
-        .can files, then writes the Edit TX command sequence to stdin:
-            2  →  Edit TX
-            {channel}
-            {msg_index}
-            {hex bytes space-separated}
+        Searches all channels for the CAN ID via engine.GetTxMessages(),
+        then calls engine.EditTxData(channel, msg_index, byte_array).
 
-        Returns True if the command was sent, False if lookup failed or
-        the simulator is not running.
+        Returns True if the command was sent, False on any failure.
         """
-        if self._sim_proc is None or self._sim_proc.stdin is None:
-            print("  [PM] send_edit: simulator not running")
+        if self._engine is None:
+            print("  [PM] send_edit: engine not started")
             return False
 
-        loc: Optional[Tuple[int, int]] = _can_lookup(can_id, self.Sim)
+        loc: Optional[Tuple[int, int]] = self._find_message(can_id)
         if loc is None:
-            print(f"  [PM] send_edit: CAN ID 0x{can_id:03X} not found in any .can file")
+            print(f"  [PM] send_edit: CAN ID 0x{can_id:03X} not found in any channel")
             return False
 
         channel, msg_index = loc
-        hex_str = " ".join(f"{b:02X}" for b in data)
+        net_data = self._Array[self._Byte](data)
 
-        cmd = f"2\n{channel}\n{msg_index}\n{hex_str}\n".encode()
         try:
-            self._sim_proc.stdin.write(cmd)
-            self._sim_proc.stdin.flush()
-        except OSError as exc:
-            print(f"  [PM] send_edit: pipe write failed — {exc}")
+            self._engine.EditTxData(channel, msg_index, net_data)
+        except Exception as exc:
+            print(f"  [PM] send_edit: EditTxData failed — {exc}")
             return False
 
+        hex_str = " ".join(f"{b:02X}" for b in data)
         print(f"  [PM] Edited 0x{can_id:03X} ch{channel} msg{msg_index}: "
               f"[{hex_str[:32]}{'...' if len(hex_str) > 32 else ''}]")
         return True
 
     def stop_all(self) -> None:
-        """Kill every tracked process tree then clean up stragglers."""
+        """Stop the simulator engine and kill every tracked subprocess."""
+        if self._engine is not None:
+            try:
+                self._engine.Stop()
+                print("  [PM] SimulatorEngine stopped")
+            except Exception as exc:
+                print(f"  [PM] engine.Stop() error: {exc}")
+            self._engine = None
+
         for pid in self._pids:
             self._kill_pid(pid)
         self._pids.clear()
-        self._sim_proc = None
 
-        for name in ["simulator.exe", "vSoC_Test.exe", "vecu_vm2.exe"]:
+        for name in ["vSoC_Test.exe", "vecu_vm2.exe"]:
             self._kill_image(name)
 
         for name in _EXTRA_IMAGE_NAMES:
@@ -148,31 +144,59 @@ class ProcessManager:
     # Internal starters
     # ------------------------------------------------------------------
 
+    def _load_clr(self, dll_dir: str) -> None:
+        """Load CLR types from CanSimulatorCs.dll (idempotent)."""
+        if self._SimulatorEngine is not None:
+            return
+
+        # The TestModule/CanSimulatorCs/ directory would shadow the CLR namespace
+        # 'CanSimulatorCs' if its parent (TestModule) is in sys.path.
+        # Temporarily remove it so Python resolves the namespace from the DLL.
+        parent = os.path.dirname(dll_dir)          # .../CanSimulatorCs
+        grandparent = os.path.dirname(parent)       # .../TestModule
+        saved = [p for p in sys.path
+                 if os.path.abspath(p) == os.path.abspath(grandparent)]
+        sys.path = [p for p in sys.path
+                    if os.path.abspath(p) != os.path.abspath(grandparent)]
+        sys.path.insert(0, dll_dir)
+
+        try:
+            import clr  # type: ignore
+            clr.AddReference("System")
+            from System import Array, Byte  # type: ignore
+            clr.AddReference("CanSimulatorCore")
+            from CanSimulatorCs import ConfigReader, SimulatorEngine  # type: ignore
+        finally:
+            sys.path.extend(saved)
+
+        self._Array           = Array
+        self._Byte            = Byte
+        self._ConfigReader    = ConfigReader
+        self._SimulatorEngine = SimulatorEngine
+
     def _start_simulator(self) -> None:
-        """
-        Start simulator.exe with stdin=PIPE (persistent, non-tty).
-        Write the initial TX enable commands immediately, then keep the
-        pipe open for runtime edits via send_edit().
-        """
-        sim_dir = os.path.join(self.base_dir, "Simulator")
-        exe = os.path.join(sim_dir, "simulator.exe")
-        ini = os.path.join(sim_dir, "config.ini")
-        log = open(os.path.join(sim_dir, "log", "sim_stdout.log"), "w")
+        """Load CanSimulatorCs.dll, create and start the SimulatorEngine."""
+        cs_dir      = os.path.join(self.base_dir, "CanSimulatorCs")
+        dll_dir     = os.path.join(cs_dir, "bin")
+        config_path = os.path.join(cs_dir, "config.ini")
 
-        print("  [PM] Starting simulator (stdin=PIPE)")
-        self._sim_proc = subprocess.Popen(
-            [exe, ini],
-            cwd    = sim_dir,
-            stdin  = subprocess.PIPE,
-            stdout = log,
-            stderr = subprocess.STDOUT,
-        )
-        self._pids.append(self._sim_proc.pid)
+        self._load_clr(dll_dir)
 
-        # Enable TX immediately — simulator reads these as soon as it starts
-        self._sim_proc.stdin.write(self._TX_COMMANDS)
-        self._sim_proc.stdin.flush()
-        print(f"  [PM] simulator.exe PID={self._sim_proc.pid}  TX enable sent")
+        # Read channel count from config so we know how many to enable
+        cfg = configparser.ConfigParser()
+        cfg.read(config_path)
+        self._channel_count = int(cfg.get("general", "channel_count", fallback=1))
+
+        print("  [PM] Loading CanSimulatorCs engine...")
+        config        = self._ConfigReader.Load(config_path)
+        self._engine  = self._SimulatorEngine(config, cs_dir)
+        self._engine.Start()
+
+        for ch in range(self._channel_count):
+            self._engine.SetTxEnabled(ch, True)
+
+        print(f"  [PM] SimulatorEngine started  "
+              f"({self._channel_count} channel(s), TX enabled)")
 
     def _start_vsoc(self) -> None:
         vsoc_dir = os.path.join(self.base_dir, "vSoC")
@@ -187,18 +211,36 @@ class ProcessManager:
         print(f"  [PM] vSoC_Test.exe PID={proc.pid}")
 
     def _start_vecu(self) -> None:
-        release_dir = os.path.join(self.base_dir, "vECU")
-        exe         = os.path.join(release_dir, "vecu_vm2.exe")
-        ini         = os.path.join(release_dir, "config.ini")
-        args        = [exe, ini] if os.path.exists(ini) else [exe]
+        vecu_dir = os.path.join(self.base_dir, "vECU")
+        exe      = os.path.join(vecu_dir, "vmcu_vm2.exe")
+        ini      = os.path.join(vecu_dir, "config.ini")
+        args     = [exe, ini] if os.path.exists(ini) else [exe]
         print("  [PM] Starting vecu_vm2.exe")
         proc = subprocess.Popen(
             args,
-            cwd           = release_dir,
+            cwd           = vecu_dir,
             creationflags = subprocess.CREATE_NEW_CONSOLE,
         )
         self._pids.append(proc.pid)
         print(f"  [PM] vecu_vm2.exe PID={proc.pid}")
+
+    # ------------------------------------------------------------------
+    # Message lookup
+    # ------------------------------------------------------------------
+
+    def _find_message(self, can_id: int) -> Optional[Tuple[int, int]]:
+        """
+        Search all channels for a CAN ID via engine.GetTxMessages().
+        Returns (channel_0based, msg_index_0based) or None.
+        """
+        for ch in range(self._channel_count):
+            tx_messages = self._engine.GetTxMessages(ch)
+            for i in range(tx_messages.Count):
+                msg = tx_messages[i]
+                mid = int(msg.Id) if hasattr(msg, "Id") else int(msg.ID)
+                if mid == can_id:
+                    return (ch, i)
+        return None
 
     # ------------------------------------------------------------------
     # Kill helpers

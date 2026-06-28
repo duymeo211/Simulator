@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """
 CAN Integration Test Runner
-============================
-Flow:
-  1. Kill any leftover processes
-  2. Clear old vSoC log
-  3. Start simulator.exe  (TCP servers: 5000, 5001, 5002)
-  4. Start vSoC_Test.exe  (connects to vECU on port 5003)
-  5. Start vecu_vm2.exe   (bridges simulator ↔ vSoC)
-  6. TX enabled automatically via stdin pipe (menu cmd file "3\n0\n")
-  7. Run for <run_duration_sec> seconds
-  8. Stop all processes
-  9. Parse vSoC/rx_debug.log
- 10. Validate each test case defined in test_cases.yaml
- 11. Print console report + write text & HTML reports to results/
+
+Flow
+----
+  1. Kill leftover processes
+  2. Clear old vSoC log (rotate to .bak)
+  3. Start CanSimulatorCs engine via DLL  (TCP: 5000 / 5001 / 5002)
+  4. Start vSoC_Test.exe
+  5. Start vecu_vm2.exe
+  6. Run for <run_duration_sec> seconds, then stop
+  7. Parse vSoC/rx_debug.log
+  8. Validate each test case
+  9. Print report + write text & HTML to Results/
 
 Usage
 -----
-  python run_test.py                       # use test_cases.yaml
-  python run_test.py --config my.yaml      # custom config
-  python run_test.py --parse-only          # skip running, just parse existing log
-  python run_test.py --duration 30         # override run duration
+  python run_test.py
+  python run_test.py --config Testcases/my.yaml
+  python run_test.py --parse-only
 """
 from __future__ import annotations
 
@@ -28,228 +26,176 @@ import argparse
 import os
 import shutil
 import sys
-import threading
 import time
 
+import threading
 import yaml
 
-# ---------------------------------------------------------------------------
-# Path setup
-# ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-from framework.process_mgr      import ProcessManager
-from framework.vsoc_log_parser  import parse_log, summary
-from framework.validator        import Validator
-from framework.reporter         import (ConsoleReporter, TestCaseResult,
-                                        write_text_report, write_html_report)
+from framework.process_mgr     import ProcessManager
+from framework.vsoc_log_parser import parse_log, summary
+from framework.validator       import Validator
+from framework.reporter        import (ConsoleReporter, TestCaseResult,
+                                       write_text_report, write_html_report)
+
+DEFAULT_CONFIG = os.path.join(BASE_DIR, "Testcases", "test_runtime - Copy.yaml")
 
 
-# ---------------------------------------------------------------------------
-# Load config
-# ---------------------------------------------------------------------------
+def _normalize_test(test: dict) -> dict:
+    test = dict(test)
+    default_can_id = test.get("message_id")
+    delay = float(test.pop("delay_sec", 5.0))
 
-def load_yaml(path: str) -> dict:
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+    # message_id + send → runtime_inject (user doesn't write inject fields manually)
+    if "message_id" in test and "send" in test:
+        test["runtime_inject"] = [{
+            "can_id":    test.pop("message_id"),
+            "delay_sec": delay,
+            "data":      test.pop("send"),
+        }]
+
+    checks = []
+    for chk in test.get("checks", []):
+        chk = dict(chk)
+        if "can_id" not in chk and default_can_id is not None:
+            chk["can_id"] = default_can_id
+        # data_byte with expected list → data_window after inject fires
+        # after_sec and skip_count are implicit — user never needs to write them
+        if chk.get("type") == "data_byte" and isinstance(chk.get("expected"), list):
+            chk["type"]       = "data_window"
+            chk["after_sec"]  = delay + 1.0
+            chk["skip_count"] = 3
+        checks.append(chk)
+    test["checks"] = checks
+    return test
 
 
-def load_config(config_path: str, duration_override: float = None) -> dict:
-    cfg      = load_yaml(config_path)
-    settings = cfg.get("settings", {})
+def load_config(config_path: str) -> dict:
+    with open(config_path) as f:
+        raw = yaml.safe_load(f)
+
+    if isinstance(raw, list):
+        tests, settings = raw, {}
+    else:
+        tests    = raw.get("tests", [])
+        settings = raw.get("settings", {})
+
     return {
-        "tests":       cfg.get("tests", []),
-        "run_sec":     duration_override or settings.get("run_duration_sec", 15),
+        "tests":       [_normalize_test(t) for t in tests],
+        "run_sec":     settings.get("run_duration_sec", 15),
         "startup_sec": settings.get("startup_delay_sec", 5),
         "connect_sec": settings.get("connect_delay_sec", 5),
         "vsoc_log":    os.path.join(BASE_DIR, settings.get("vsoc_log", "vSoC/rx_debug.log")),
     }
 
 
-# ---------------------------------------------------------------------------
-# Clear old log (rotate, do not delete — keep one backup)
-# ---------------------------------------------------------------------------
-
-def clear_vsoc_log(log_path: str) -> None:
+def _clear_log(log_path: str) -> None:
     if not os.path.exists(log_path):
         return
     backup = log_path + ".bak"
     if os.path.exists(backup):
         os.remove(backup)
     shutil.move(log_path, backup)
-    print(f"  [Setup] Old log backed up → {backup}")
+    print(f"  [Setup] Log rotated → {backup}")
 
 
-# ---------------------------------------------------------------------------
-# Shared stack runner
-# ---------------------------------------------------------------------------
+def _fire_injections(pm: ProcessManager, tests: list) -> list:
+    threads = []
+    for test_def in tests:
+        for rt in test_def.get("runtime_inject", []):
+            can_id = int(rt["can_id"], 16) if isinstance(rt["can_id"], str) else int(rt["can_id"])
+            data   = [int(v, 16) if isinstance(v, str) else int(v) for v in rt["data"]]
+            delay  = float(rt.get("delay_sec", 5.0))
 
-def _run_stack(tests: list, run_sec: float, startup_sec: float,
-               connect_sec: float, vsoc_log: str) -> None:
-    """Start simulator stack, fire injections, wait, then stop."""
-    pm = ProcessManager(
-        base_dir      = BASE_DIR,
-        startup_delay = startup_sec,
-        connect_delay = connect_sec,
-    )
+            def _send(can_id=can_id, data=data, delay=delay):
+                time.sleep(delay)
+                print(f"[Inject] 0x{can_id:03X} at t+{delay}s")
+                pm.send_edit(can_id, data)
+
+            t = threading.Thread(target=_send, daemon=True)
+            t.start()
+            threads.append(t)
+    return threads
+
+
+def _run_stack(c: dict) -> None:
+    pm = ProcessManager(base_dir=BASE_DIR,
+                        startup_delay=c["startup_sec"],
+                        connect_delay=c["connect_sec"])
 
     print("[Setup] Cleaning up stale processes...")
     pm.stop_all()
     time.sleep(1)
-    clear_vsoc_log(vsoc_log)
+    _clear_log(c["vsoc_log"])
 
     print("[Setup] Starting stack...")
     pm.start_all()
 
-    rt_threads = []
-    for test_def in tests:
-        for rt in test_def.get("runtime_inject", []):
-            can_id = int(rt["can_id"], 16) if isinstance(rt["can_id"], str) \
-                     else int(rt["can_id"])
-            data   = [int(v, 16) if isinstance(v, str) else int(v)
-                      for v in rt["data"]]
-            delay  = float(rt.get("delay_sec", 5.0))
-            label  = test_def.get("name", "?")
+    threads = _fire_injections(pm, c["tests"])
+    print(f"[Setup] Running {c['run_sec']}s...")
+    time.sleep(c["run_sec"])
 
-            def _inject(pm=pm, can_id=can_id, data=data,
-                        delay=delay, label=label):
-                time.sleep(delay)
-                print(f"[Runtime] Injecting 0x{can_id:03X} for '{label}' at t+{delay}s  "
-                      f"data=[{' '.join(f'0x{b:02X}' for b in data)}]")
-                pm.send_edit(can_id, data)
-
-            t = threading.Thread(target=_inject, daemon=True)
-            t.start()
-            rt_threads.append(t)
-
-    injections = sum(len(td.get("runtime_inject", [])) for td in tests)
-    print(f"[Setup] Running {run_sec}s — {injections} injection(s) scheduled...")
-    time.sleep(run_sec)
-
-    for t in rt_threads:
+    for t in threads:
         t.join(timeout=2)
 
-    print("[Setup] Stopping all processes...")
+    print("[Setup] Stopping...")
     pm.stop_all()
 
 
-# ---------------------------------------------------------------------------
-# Main test loop
-# ---------------------------------------------------------------------------
-
-def run_inject_only(config_path: str, duration_override: float = None) -> int:
-    """Start the stack, fire runtime injections, then stop. No log parsing."""
-    c = load_config(config_path, duration_override)
-    _run_stack(c["tests"], c["run_sec"], c["startup_sec"], c["connect_sec"], c["vsoc_log"])
-    print("[Setup] Done. Log not parsed (inject-only mode).")
-    return 0
-
-
-def run_tests(config_path: str,
-              parse_only:  bool  = False,
-              duration_override: float = None) -> int:
-
-    c = load_config(config_path, duration_override)
-    tests, run_sec, startup_sec, connect_sec, vsoc_log = (
-        c["tests"], c["run_sec"], c["startup_sec"], c["connect_sec"], c["vsoc_log"]
-    )
-    results_dir = os.path.join(BASE_DIR, "Results")
-
+def run_tests(config_path: str, parse_only: bool = False) -> int:
+    c = load_config(config_path)
     console = ConsoleReporter(color=True)
-    console.suite_header(len(tests))
+    console.suite_header(len(c["tests"]))
 
     if not parse_only:
-        _run_stack(tests, run_sec, startup_sec, connect_sec, vsoc_log)
-        print("[Setup] Waiting for log flush...")
+        _run_stack(c)
         time.sleep(2)
     else:
-        print("[Setup] --parse-only mode: skipping process execution\n")
+        print("[Setup] --parse-only: skipping stack\n")
 
-    # -----------------------------------------------------------------------
-    # 2. Parse vSoC log
-    # -----------------------------------------------------------------------
+    vsoc_log = c["vsoc_log"]
     print(f"[Parser] Reading {vsoc_log}")
     if not os.path.exists(vsoc_log):
-        print(f"[Parser] ERROR: log file not found: {vsoc_log}")
+        print(f"[Parser] ERROR: log not found: {vsoc_log}")
         return 1
 
     all_frames = parse_log(vsoc_log)
     print(f"[Parser] {len(all_frames)} frames parsed")
 
-    # Print a summary of what was found
-    summ = summary(all_frames)
     print("[Parser] CAN ID summary:")
-    for can_id, info in sorted(summ.items()):
-        pages = sorted(info["pages"])
+    for can_id, info in sorted(summary(all_frames).items()):
         print(f"         0x{can_id:03X}  count={info['count']:4d}  "
-              f"DLC={info['dlc']:2d}  pages={pages}")
+              f"DLC={info['dlc']:2d}  pages={sorted(info['pages'])}")
     print()
 
-    # -----------------------------------------------------------------------
-    # 3. Run validation and collect results
-    # -----------------------------------------------------------------------
+    validator   = Validator(all_frames)
     all_results: list[TestCaseResult] = []
-    validator = Validator(all_frames)
-
-    for i, test_def in enumerate(tests, 1):
-        name        = test_def.get("name", f"Test {i}")
-        description = test_def.get("description", "")
-        checks      = test_def.get("checks", [])
-
-        check_results = validator.run_all(checks)
-        result        = TestCaseResult(name, description, check_results)
+    for i, test_def in enumerate(c["tests"], 1):
+        result = TestCaseResult(
+            test_def.get("name", f"Test {i}"),
+            test_def.get("description", ""),
+            validator.run_all(test_def.get("checks", [])),
+        )
         all_results.append(result)
-
-        console.test_result(result, i, len(tests))
+        console.test_result(result, i, len(c["tests"]))
 
     console.suite_summary(all_results)
 
-    # -----------------------------------------------------------------------
-    # 4. Write reports
-    # -----------------------------------------------------------------------
-    txt_path  = write_text_report(all_results, results_dir)
-    html_path = write_html_report(all_results, results_dir)
-    print(f"  Text report : {txt_path}")
-    print(f"  HTML report : {html_path}")
-    print()
+    results_dir = os.path.join(BASE_DIR, "Results")
+    print(f"  Text : {write_text_report(all_results, results_dir)}")
+    print(f"  HTML : {write_html_report(all_results, results_dir)}\n")
 
-    failed = sum(1 for r in all_results if not r.passed)
-    return 1 if failed > 0 else 0
+    return 1 if any(not r.passed for r in all_results) else 0
 
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="CAN Integration Test Runner")
-    parser.add_argument(
-        "--config", default=os.path.join(BASE_DIR, "Testcases/test_original.yaml"),
-        help="Path to test_cases.yaml (default: test_cases.yaml)")
-    parser.add_argument(
-        "--parse-only", action="store_true",
-        help="Skip launching processes; parse existing vSoC log only")
-    parser.add_argument(
-        "--inject-only", action="store_true",
-        help="Start stack, fire runtime injections, then stop — skip log parsing")
-    parser.add_argument(
-        "--duration", type=float, default=None,
-        help="Override run duration in seconds")
-    args = parser.parse_args()
-
-    if args.inject_only:
-        return run_inject_only(
-            config_path       = args.config,
-            duration_override = args.duration,
-        )
-
-    return run_tests(
-        config_path       = args.config,
-        parse_only        = args.parse_only,
-        duration_override = args.duration,
-    )
+    p = argparse.ArgumentParser(description="CAN Integration Test Runner")
+    p.add_argument("--config", default=DEFAULT_CONFIG)
+    p.add_argument("--parse-only", action="store_true")
+    args = p.parse_args()
+    return run_tests(args.config, args.parse_only)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 
@@ -59,12 +59,12 @@ class VsocFrame:
 # Parser
 # =========================================================================
 
-# [09:36:56.035] [RX] Page-2 | ID=0x381 | DLC=32 | 00 07 00 3C ...
+# [23:44:07.073] Page-0 | 0x381 | 0x381 | DLC=32 | 00 07 00 3C ...
 _RE_FRAME = re.compile(
     r"^\[(\d{2}:\d{2}:\d{2}\.\d{3})\]\s+"   # [1] timestamp
-    r"\[RX\]\s+"
-    r"Page-(\d+)\s+\|\s+"                   # [2] page
-    r"ID=(0x[0-9A-Fa-f]+)\s+\|\s+"          # [3] CAN ID
+    r"Page-(\d+)\s+\|\s+"                    # [2] page
+    r"(0x[0-9A-Fa-f]+)\s+\|\s+"             # [3] CAN ID
+    r"0x[0-9A-Fa-f]+\s+\|\s+"               # skip duplicate ID field
     r"DLC=(\d+)\s+\|\s+"                    # [4] DLC
     r"((?:[0-9A-Fa-f]{2}\s*)+)"             # [5] hex data
 )
@@ -93,15 +93,22 @@ def parse_log(log_path: str,
     except FileNotFoundError:
         return frames
 
-    today = datetime.now().date()
+    today    = datetime.now().date()
+    last_ts: "datetime | None" = None
 
     for line in lines:
         m = _RE_FRAME.match(line.rstrip())
         if not m:
             continue
 
-        ts  = datetime.strptime(m.group(1), "%H:%M:%S.%f").replace(
-              year=today.year, month=today.month, day=today.day)
+        ts = datetime.strptime(m.group(1), "%H:%M:%S.%f").replace(
+             year=today.year, month=today.month, day=today.day)
+
+        # Detect midnight rollover: timestamp went backward across 00:00
+        if last_ts is not None and ts < last_ts:
+            today += timedelta(days=1)
+            ts = ts.replace(year=today.year, month=today.month, day=today.day)
+        last_ts = ts
         pg  = int(m.group(2))
         cid = int(m.group(3), 16)
         dlc = int(m.group(4))
