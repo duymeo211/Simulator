@@ -46,27 +46,16 @@ DEFAULT_CONFIG = os.path.join(BASE_DIR, "Testcases", "test_runtime - Copy.yaml")
 def _normalize_test(test: dict) -> dict:
     test = dict(test)
     default_can_id = test.get("message_id")
-    delay = float(test.pop("delay_sec", 5.0))
-
-    # message_id + send → runtime_inject (user doesn't write inject fields manually)
-    if "message_id" in test and "send" in test:
-        test["runtime_inject"] = [{
-            "can_id":    test.pop("message_id"),
-            "delay_sec": delay,
-            "data":      test.pop("send"),
-        }]
+    delay = float(test.get("delay_sec", 5.0))
 
     checks = []
     for chk in test.get("checks", []):
         chk = dict(chk)
         if "can_id" not in chk and default_can_id is not None:
             chk["can_id"] = default_can_id
-        # data_byte with expected list → data_window after inject fires
-        # after_sec and skip_count are implicit — user never needs to write them
         if chk.get("type") == "data_byte" and isinstance(chk.get("expected"), list):
-            chk["type"]       = "data_window"
-            chk["after_sec"]  = delay + 1.0
-            chk["skip_count"] = 3
+            chk["type"]      = "data_window"
+            chk["after_sec"] = delay + 4.0
         checks.append(chk)
     test["checks"] = checks
     return test
@@ -74,20 +63,14 @@ def _normalize_test(test: dict) -> dict:
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
-        raw = yaml.safe_load(f)
-
-    if isinstance(raw, list):
-        tests, settings = raw, {}
-    else:
-        tests    = raw.get("tests", [])
-        settings = raw.get("settings", {})
+        tests = yaml.safe_load(f)   # always a flat list of test dicts
 
     return {
         "tests":       [_normalize_test(t) for t in tests],
-        "run_sec":     settings.get("run_duration_sec", 15),
-        "startup_sec": settings.get("startup_delay_sec", 5),
-        "connect_sec": settings.get("connect_delay_sec", 5),
-        "vsoc_log":    os.path.join(BASE_DIR, settings.get("vsoc_log", "vSoC/rx_debug.log")),
+        "run_sec":     15,
+        "startup_sec": 5,
+        "connect_sec": 5,
+        "vsoc_log":    os.path.join(BASE_DIR, "vSoC/rx_debug.log"),
     }
 
 
@@ -104,19 +87,20 @@ def _clear_log(log_path: str) -> None:
 def _fire_injections(pm: ProcessManager, tests: list) -> list:
     threads = []
     for test_def in tests:
-        for rt in test_def.get("runtime_inject", []):
-            can_id = int(rt["can_id"], 16) if isinstance(rt["can_id"], str) else int(rt["can_id"])
-            data   = [int(v, 16) if isinstance(v, str) else int(v) for v in rt["data"]]
-            delay  = float(rt.get("delay_sec", 5.0))
+        if "message_id" not in test_def or "send" not in test_def:
+            continue
+        can_id = int(test_def["message_id"], 16) if isinstance(test_def["message_id"], str) else int(test_def["message_id"])
+        data   = [int(v, 16) if isinstance(v, str) else int(v) for v in test_def["send"]]
+        delay  = float(test_def.get("delay_sec", 5.0))
 
-            def _send(can_id=can_id, data=data, delay=delay):
-                time.sleep(delay)
-                print(f"[Inject] 0x{can_id:03X} at t+{delay}s")
-                pm.send_edit(can_id, data)
+        def _send(can_id=can_id, data=data, delay=delay):
+            time.sleep(delay)
+            print(f"[Inject] 0x{can_id:03X} at t+{delay}s")
+            pm.send_edit(can_id, data)
 
-            t = threading.Thread(target=_send, daemon=True)
-            t.start()
-            threads.append(t)
+        t = threading.Thread(target=_send, daemon=True)
+        t.start()
+        threads.append(t)
     return threads
 
 
